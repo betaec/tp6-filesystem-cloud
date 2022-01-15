@@ -1,0 +1,25 @@
+{
+    "name": "johnny/tp6-filesystem-cloud",
+    "description": "thinkphp6 filesystem cloud support,include Aliyun,Qcloud and Qiniu.",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "think\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Johnny",
+            "email": "johnnycaimail@yeah.net"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "php": ">=7.1.0",
+        "topthink/framework": "^6.0.0",
+        "qiniu/php-sdk": "^7.2",
+        "qcloud/cos-sdk-v5": "^2.0",
+        "aliyuncs/oss-sdk-php": "^2.3"
+    }
+}

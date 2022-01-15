@@ -3,7 +3,13 @@ ThinkPHP6 的Filesystem扩展包，支持上传到阿里云、腾讯云、七牛
 
 ## 使用方法
 
-### config/filesystem.php中增加对应驱动配置
+### 安装
+
+```php
+composer require johnnycai/tp6-filesystem-cloud
+```
+
+### 在config/filesystem.php中增加对应驱动配置
 
 ```php
 return [
@@ -59,6 +65,8 @@ return [
     ]
 ];
 ```
+## 用法
+
 ### 上传
 ```php
 $file = $this->request->file('file');

@@ -90,12 +90,21 @@ class CosAdapter extends AbstractAdapter
     public function writeStream($path, $resource, Config $config)
     {
         try {
-            return $this->client->upload(
+            $contents = stream_get_contents($resource);
+
+            $result = $this->client->upload(
                 $this->getBucketWithAppId(),
                 $path,
-                stream_get_contents($resource, -1, 0),
+                $contents,
                 $this->prepareUploadConfig($config)
             );
+
+            if (is_resource($resource)) {
+                fclose($resource);
+            }
+
+            return $result;
+
         } catch (ServiceResponseException $e) {
             return false;
         }
@@ -347,18 +356,34 @@ class CosAdapter extends AbstractAdapter
      * 单次调用 listObjects 接口一次只能查询1000个对象，如需要查询所有的对象，则需要循环调用。
      * @param string $dirname
      * @param bool   $recursive
-     * @param string $marker    max return 1000 record, if record greater than 1000
-     *                          you should set the next marker to get the full list
      * @return array
      */
-    public function listDirObjects($directory = '', $recursive = false, $marker = '') {
-        return $this->client->listObjects([
-            'Bucket'    => $this->getBucketWithAppId(),
-            'Prefix'    => ('' === (string)$directory) ? '' : ($directory . '/'),
-            'Delimiter' => $recursive ? '' : '/',
-            'Marker'    => $marker,
-            'MaxKeys'   => 1000,//设置单次查询打印的最大数量，最大为1000
-        ]);
+    public function listDirObjects($directory = '', $recursive = false)
+    {
+        $nextMarker = '';
+        $list = [];
+        $directory = ('' === (string)$directory) ? '' : ($directory . '/');
+
+        while (true) {
+            $response = $this->client->listObjects([
+                'Bucket'    => $this->getBucketWithAppId(),
+                'Prefix'    => $directory,
+                'Delimiter' => $recursive ? '' : '/',
+                'Marker'    => $nextMarker,
+                'MaxKeys'   => 1000,//设置单次查询打印的最大数量，最大为1000
+            ]);
+
+            foreach ((array) $response['Contents'] as $content) {
+                $list[] = $this->normalizeFileInfo($content);
+            }
+
+            if (!$response['IsTruncated']) {
+                break;
+            }
+            $nextMarker = $response['NextMarker'] ?: '';
+        }
+
+        return $list;
     }
 
     /**
@@ -371,23 +396,9 @@ class CosAdapter extends AbstractAdapter
      */
     public function listContents($directory = '', $recursive = false)
     {
-        $list = [];
+        $directory = '/' == substr($directory, -1) ? $directory : $directory.'/';
 
-        $marker = '';
-        while (true) {
-            $response = $this->listDirObjects($directory, $recursive, $marker);
-
-            foreach ((array) $response['Contents'] as $content) {
-                $list[] = $this->normalizeFileInfo($content);
-            }
-
-            if (!$response['IsTruncated']) {
-                break;
-            }
-            $marker = $response['NextMarker'] ?: '';
-        }
-
-        return $list;
+        return $this->listDirObjects($directory,$recursive);
     }
 
     /**

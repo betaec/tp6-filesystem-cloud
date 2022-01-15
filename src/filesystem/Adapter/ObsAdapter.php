@@ -10,22 +10,40 @@
 
 namespace think\filesystem\Adapter;
 
-use OSS\OssClient;
-use OSS\Core\OssException;
+use Obs\ObsClient;
+use Obs\ObsException;
+use Psr\Http\Message\StreamInterface;
+use Psr\Http\Message\UriInterface;
 use League\Flysystem\Config;
 use League\Flysystem\AdapterInterface;
 use League\Flysystem\Adapter\AbstractAdapter;
 
 /**
- * Class OssAdapter
+ * Class ObsAdapter
  * @author johnny <johnnycaimail@yeah.net>
  */
-class OssAdapter extends AbstractAdapter
+class ObsAdapter extends AbstractAdapter
 {
     /**
-     * @var $client
+     * @var \Obs\ObsClient
      */
-    private $client;
+    protected $client;
+
+    /**
+     * @var array
+     */
+    protected $config;
+
+    /**
+     * @var $bucket
+     */
+    protected $bucket;
+
+    /**
+     * @var mixed[]|array<string, bool>|array<string, string>
+     * @phpstan-var array{url?: string, temporary_url?: string, endpoint?: string, bucket_endpoint?: bool}
+     */
+    protected $options = [];
 
     /**
      * @var string $endpoint
@@ -33,47 +51,26 @@ class OssAdapter extends AbstractAdapter
     private $endpoint;
 
     /**
-     * @var $bucket
-     */
-    private $bucket;
-
-    /**
      * @var string $domain
      */
     private $domain;
 
     /**
-     * 初始化
+     * ObsAdapter constructor.
+     *
      * @param array $config
-     * @throws \OSS\Core\OssException
      */
-    public function __construct($config = [])
+    public function __construct(array $config = [])
     {
-        $isCName = false;
-        $token = null;
-        $this->bucket = $config['bucket'];
-        empty($config['endpoint']) ? null : $this->endpoint = trim(trim($config['endpoint']),"/");
-        empty($config['timeout']) ? $config['timeout'] = 3600 : null;
-        empty($config['connectTimeout']) ? $config['connectTimeout'] = 10 : null;
-
-        if (!empty($config['isCName'])) {
-            $isCName = true;
-        }
-
-        if (!empty($config['token'])) {
-            $token = $config['token'];
-        }
-
-        if (!empty($config['prefix'])) {
-            $this->setPathPrefix($config['prefix']);
-        }
-
-        $this->client = new OssClient(
-            $config['accessKeyId'],$config['accessKeySecret'],$this->endpoint,$isCName,$token
-        );
-        $this->client->setTimeout($config['timeout']);
-        $this->client->setConnectTimeout($config['connectTimeout']);
+        $this->config = $config;
+        $this->endpoint = $config['endpoint'];
         $this->domain = $config['domain'];
+
+        $this->client = new ObsClient([
+            'key' => $config['accessKey'],
+            'secret' => $config['secretKey'],
+            'endpoint' => $config['endpoint'],
+        ]);
     }
 
     /**
@@ -87,21 +84,16 @@ class OssAdapter extends AbstractAdapter
      */
     public function write($path, $contents, Config $config)
     {
-        $path = $this->applyPathPrefix($path);
-
-        $options = [];
-        if ($config->has('options')) {
-            $options = $config->get('options');
+        try {
+            $resp = $this->client->putObject([
+                'Bucket' => $this->bucket,
+                'Key' => $path,
+                'Body' => $contents,
+            ]);
+            return $resp->toArray();
+        } catch (ObsException $obsException) {
+            return false;
         }
-        if ($config->has("Content-Type")) {
-            $options["Content-Type"] = $config->get("Content-Type");
-        }
-        if ($config->has("Content-Md5")) {
-            $options["Content-Md5"] = $config->get("Content-Md5");
-            $options["checkmd5"] = false;
-        }
-        $result = $this->client->putObject($this->bucket, $path, $contents, $options);
-        return $result;
     }
 
     /**
@@ -115,9 +107,24 @@ class OssAdapter extends AbstractAdapter
      */
     public function writeStream($path, $resource, Config $config)
     {
-        $contents = stream_get_contents($resource);
+        try {
+            $contents = stream_get_contents($resource);
 
-        return $this->write($path, $contents, $config);
+            $result = $this->client->putObject([
+                'Bucket' => $this->bucket,
+                'Key' => $path,
+                'Body' => $contents,
+            ]);
+
+            if (is_resource($resource)) {
+                fclose($resource);
+            }
+
+            return $result->toArray();
+
+        } catch (ObsException $obsException) {
+            return false;
+        }
     }
 
     /**
@@ -131,16 +138,7 @@ class OssAdapter extends AbstractAdapter
      */
     public function update($path, $contents, Config $config)
     {
-        $options = [];
-        if ($config->has("Content-Type")) {
-            $options["Content-Type"] = $config->get("Content-Type");
-        }
-        if ($config->has("Content-Md5")) {
-            $options["Content-Md5"] = $config->get("Content-Md5");
-            $options["checkmd5"] = false;
-        }
-        $result = $this->client->putObject($this->bucket, $path, $contents, $options);
-        return $result;
+        return $this->write($path, $contents, $config);
     }
 
     /**
@@ -154,11 +152,7 @@ class OssAdapter extends AbstractAdapter
      */
     public function updateStream($path, $resource, Config $config)
     {
-        $result = $this->write($path, stream_get_contents($resource), $config);
-        if (is_resource($resource)) {
-            fclose($resource);
-        }
-        return $result;
+        return $this->writeStream($path, $resource, $config);
     }
 
     /**
@@ -171,11 +165,16 @@ class OssAdapter extends AbstractAdapter
      */
     public function rename($path, $newpath)
     {
-        if (!$this->copy($path, $newpath)) {
+        try {
+            if ($this->copy($path, $newpath)) {
+                return $this->delete($path);
+            }
+
+            return false;
+
+        } catch (ObsException $exception) {
             return false;
         }
-
-        return $this->delete($path);
     }
 
     /**
@@ -188,16 +187,18 @@ class OssAdapter extends AbstractAdapter
      */
     public function copy($path, $newpath)
     {
-        $path = $this->applyPathPrefix($path);
-        $newpath = $this->applyPathPrefix($newpath);
-
         try {
-            $this->client->copyObject($this->bucket, $path, $this->bucket, $newpath);
-        } catch (OssException $exception) {
+            $result = $this->client->copyObject([
+                'Bucket' => $this->bucket,
+                'Key' => $path,
+                'CopySource' => $newpath,
+            ]);
+
+            return $result['HttpStatusCode'] == 200;
+
+        } catch (ObsException $exception) {
             return false;
         }
-
-        return true;
     }
 
     /**
@@ -209,15 +210,17 @@ class OssAdapter extends AbstractAdapter
      */
     public function delete($path)
     {
-        $path = $this->applyPathPrefix($path);
-
         try {
-            $this->client->deleteObject($this->bucket, $path);
-        } catch (OssException $ossException) {
+            $result = $this->client->deleteObject([
+                'Bucket' => $this->bucket,
+                'Key' => $path,
+            ]);
+
+            return $result['HttpStatusCode'] == 200;
+
+        } catch (ObsException $exception) {
             return false;
         }
-
-        return !$this->has($path);
     }
 
     /**
@@ -247,7 +250,11 @@ class OssAdapter extends AbstractAdapter
      */
     public function createDir($dirname, Config $config)
     {
-        $this->client->createObjectDir($this->bucket, $dirname);
+        try {
+            $this->write(trim($dirname, '/') . '/', '', $config);
+        } catch (ObsException $exception) {
+            return false;
+        }
         return true;
     }
 
@@ -260,16 +267,17 @@ class OssAdapter extends AbstractAdapter
      */
     public function has($path)
     {
-        $path = $this->applyPathPrefix($path);
-
-        return $this->client->doesObjectExist($this->bucket, $path);
+        try {
+            return (bool) $this->getMetadata($path);
+        } catch (ObsException $exception) {
+            return false;
+        }
     }
 
     /**
-     * Get resource url.
+     * getUrl
      *
      * @param string $path
-     *
      * @return string
      */
     public function getUrl($path)
@@ -292,16 +300,20 @@ class OssAdapter extends AbstractAdapter
      */
     public function setVisibility($path, $visibility)
     {
-        $object = $this->applyPathPrefix($path);
-        $acl = (AdapterInterface::VISIBILITY_PUBLIC === $visibility) ? OssClient::OSS_ACL_TYPE_PUBLIC_READ : OssClient::OSS_ACL_TYPE_PRIVATE;
+        $path = $this->applyPathPrefix($path);
+
+        $acl = (AdapterInterface::VISIBILITY_PUBLIC === $visibility) ? ObsClient::AclPublicRead : ObsClient::AclPrivate;
 
         try {
-            $this->client->putObjectAcl($this->bucket, $object, $acl);
-        } catch (OssException $exception) {
+            $resp = $this->client->setObjectAcl([
+                'Bucket' => $this->bucket,
+                'Key' => $path,
+                'ACL' => $acl,
+            ]);
+            return $resp['HttpStatusCode'] == 200;
+        } catch (ObsException $exception) {
             return false;
         }
-
-        return compact('visibility');
     }
 
     /**
@@ -313,13 +325,10 @@ class OssAdapter extends AbstractAdapter
      */
     public function read($path)
     {
-        try {
-            $contents = $this->getObject($path);
-        } catch (OssException $exception) {
-            return false;
-        }
+        $resp = $this->getObject($path)
+            ->getContents();
 
-        return compact('contents', 'path');
+        return ['contents' => (string)$resp];
     }
 
     /**
@@ -331,62 +340,52 @@ class OssAdapter extends AbstractAdapter
      */
     public function readStream($path)
     {
-        try {
-            $stream = fopen('php://temp', 'w+b');
-            fwrite($stream, $this->getObject($path));
-            rewind($stream);
-        } catch (OssException $exception) {
-            return false;
-        }
+        $resp = $this->getObject($path)
+            ->detach();
 
-        return compact('stream');
+        return ['stream' => $resp];
     }
 
     /**
      * File list core method.
-     *
+     * 单次调用 listObjects 接口一次只能查询1000个对象，如需要查询所有的对象，则需要循环调用。
      * @param string $dirname
      * @param bool   $recursive
-     *
      * @return array
-     *
-     * @throws OssException
      */
-    public function listDirObjects($dirname = '', $recursive = false)
-    {
+    public function listDirObjects($directory = '', $recursive = false) {
         $delimiter = '/';
         $nextMarker = '';
-        $maxkeys = 1000;
 
         $result = [];
 
         while (true) {
             $options = [
-                'delimiter' => $delimiter,
-                'prefix' => $dirname,
-                'max-keys' => $maxkeys,
-                'marker' => $nextMarker,
+                'Bucket' => $this->bucket,
+                'Prefix' => $directory,
+                'Marker' => $nextMarker,
+                'MaxKeys' => 1000,
+                'Delimiter' => $delimiter,
             ];
 
             try {
-                $listObjectInfo = $this->client->listObjects($this->bucket, $options);
-            } catch (OssException $exception) {
+                $model = $this->client->listObjects($this->bucket, $options);
+            } catch (ObsException $exception) {
                 throw $exception;
             }
 
-            $nextMarker = $listObjectInfo->getNextMarker();
-            $objectList = $listObjectInfo->getObjectList(); // 文件列表
-            $prefixList = $listObjectInfo->getPrefixList(); // 目录列表
+            $nextMarker = $model['NextMarker'];
+            $objectList = $model['Contents'];
+            $prefixList = $model['CommonPrefixes'];
 
             if (!empty($objectList)) {
                 foreach ($objectList as $objectInfo) {
-                    $object['Prefix'] = $dirname;
-                    $object['Key'] = $objectInfo->getKey();
-                    $object['LastModified'] = $objectInfo->getLastModified();
-                    $object['eTag'] = $objectInfo->getETag();
-                    $object['Type'] = $objectInfo->getType();
-                    $object['Size'] = $objectInfo->getSize();
-                    $object['StorageClass'] = $objectInfo->getStorageClass();
+                    $object['Prefix'] = $directory;
+                    $object['Key'] = $objectInfo['Key'];
+                    $object['LastModified'] = $objectInfo['LastModified'];
+                    $object['eTag'] = $objectInfo['ETag'];
+                    $object['Size'] = $objectInfo['Size'];
+                    $object['StorageClass'] = $objectInfo['StorageClass'];
                     $result['objects'][] = $object;
                 }
             } else {
@@ -395,7 +394,7 @@ class OssAdapter extends AbstractAdapter
 
             if (!empty($prefixList)) {
                 foreach ($prefixList as $prefixInfo) {
-                    $result['prefix'][] = $prefixInfo->getPrefix();
+                    $result['prefix'][] = $prefixInfo['Prefix'];
                 }
             } else {
                 $result['prefix'] = [];
@@ -433,7 +432,7 @@ class OssAdapter extends AbstractAdapter
 
         if (!empty($result['objects'])) {
             foreach ($result['objects'] as $files) {
-                if ('oss.txt' == substr($files['Key'], -7) || !$fileInfo = $this->normalizeFileInfo($files)) {
+                if ('obs.txt' == substr($files['Key'], -7) || !$fileInfo = $this->normalizeFileInfo($files)) {
                     continue;
                 }
                 $list[] = $fileInfo;
@@ -463,10 +462,27 @@ class OssAdapter extends AbstractAdapter
     public function getMetadata($path)
     {
         $path = $this->applyPathPrefix($path);
+        $metadata = [];
 
         try {
-            $metadata = $this->client->getObjectMeta($this->bucket, $path);
-        } catch (OssException $exception) {
+            $result = $this->client->getObjectMetadata([
+                'Bucket' => $this->bucket,
+                'Key' => $path,
+            ]);
+
+            if($result['HttpStatusCode'] == 200) {
+                $metadata = [
+                    'Key' => $path,
+                    'LastModified' => $result['LastModified'],
+                    'eTag'  => $result['ETag'],
+                    'Size' => $result['LastModified'],
+                    'ContentType' => $result['ContentType'],
+                    'StorageClass' => $result['StorageClass'],
+                ];
+            }else {
+                return false;
+            }
+        } catch (ObsException $exception) {
             return false;
         }
 
@@ -482,9 +498,9 @@ class OssAdapter extends AbstractAdapter
      */
     public function getSize($path)
     {
-        $meta = $this->normalizeFileInfo(['Key' => $path]);
+        $meta = $this->getMetadata($path);
 
-        return isset($meta['size']) ? ['size' => $meta['size']] : false;
+        return isset($meta['Size']) ? ['size' => $meta['Size']] : false;
     }
 
     /**
@@ -496,9 +512,9 @@ class OssAdapter extends AbstractAdapter
      */
     public function getMimetype($path)
     {
-        $meta = $this->normalizeFileInfo(['Key' => $path]);
+        $meta = $this->getMetadata($path);
 
-        return isset($meta['mimetype']) ? ['mimetype' => $meta['mimetype']] : false;
+        return isset($meta['ContentType']) ? ['mimetype' => $meta['ContentType']] : false;
     }
 
     /**
@@ -510,9 +526,8 @@ class OssAdapter extends AbstractAdapter
      */
     public function getTimestamp($path)
     {
-        $meta = $this->normalizeFileInfo(['Key' => $path]);
-
-        return isset($meta['timestamp']) ? ['timestamp' => strtotime($meta['timestamp'])] : false;
+        $meta = $this->getMetadata($path);
+        return isset($meta['LastModified']) ? ['timestamp' => strtotime($meta['LastModified'])] : false;
     }
 
     /**
@@ -526,39 +541,28 @@ class OssAdapter extends AbstractAdapter
     {
         $path = $this->applyPathPrefix($path);
 
-        $response = $this->client->getObjectAcl($this->bucket, $path);
-        return [
-            'visibility' => $response,
-        ];
-    }
+        try {
+            $meta = $this->client->getObjectAcl(
+                [
+                    'Bucket' => $this->bucket,
+                    'Key' => $path,
+                ]
+            );
 
-    /**
-     * normalize Host.
-     *
-     * @param string $domain
-     * @return string
-     */
-    protected function normalizeHost($domain)
-    {
-        if (0 !== stripos($domain, 'https://') && 0 !== stripos($domain, 'http://')) {
-            $domain = "http://{$domain}";
+            foreach ($meta['Grants'] as $grant) {
+                if (isset($grant['Grantee']['URI'])
+                    && $grant['Permission'] === ObsClient::PermissionRead
+                    && strpos($grant['Grantee']['URI'], ObsClient::AllUsers) !== false
+                ) {
+                    return ['visibility' => AdapterInterface::VISIBILITY_PUBLIC];
+                }
+            }
+
+            return ['visibility' => AdapterInterface::VISIBILITY_PRIVATE];
+
+        } catch (ObsException $exception) {
+            return false;
         }
-
-        return rtrim($domain, '/').'/';
-    }
-
-    /**
-     * Read an object from the OssClient.
-     *
-     * @param $path
-     *
-     * @return string
-     */
-    protected function getObject($path)
-    {
-        $path = $this->applyPathPrefix($path);
-
-        return $this->client->getObject($this->bucket, $path);
     }
 
     /**
@@ -579,11 +583,45 @@ class OssAdapter extends AbstractAdapter
         return [
             'type' => 'file',
             'path' => $filePath,
-            'timestamp' => $meta['info']['filetime'],
-            'size' => $meta['content-length'],
-            'mimetype' => $meta['content-type'],
-            'md5'   => $meta['Content-Md5'],
+            'timestamp' => $meta['LastModified'],
+            'size' => $meta['Size'],
+            'mimetype' => $meta['ContentType'],
+            'md5'   => $meta['eTag'],
         ];
+    }
+
+    /**
+     * Read an object from the ObsClient.
+     */
+    protected function getObject(string $path): StreamInterface
+    {
+        $path = $this->applyPathPrefix($path);
+
+        try {
+            $model = $this->client->getObject([
+                'Bucket' => $this->bucket,
+                'Key' => $path,
+            ]);
+
+            return $model['Body'];
+        } catch (ObsException $exception) {
+            throw $exception;
+        }
+    }
+
+    /**
+     * normalize Host.
+     *
+     * @param string $domain
+     * @return string
+     */
+    protected function normalizeHost($domain)
+    {
+        if (0 !== stripos($domain, 'https://') && 0 !== stripos($domain, 'http://')) {
+            $domain = "http://{$domain}";
+        }
+
+        return rtrim($domain, '/').'/';
     }
 
     /**

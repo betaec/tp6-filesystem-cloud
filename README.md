@@ -1,5 +1,5 @@
 # tp6-filesystem-cloud
-ThinkPHP6 的Filesystem扩展包，支持上传到阿里云、腾讯云、七牛云
+ThinkPHP6 的Filesystem扩展包，支持上传到阿里云、腾讯云、七牛云、华为云
 
 ## 使用方法
 
@@ -7,7 +7,7 @@ ThinkPHP6 的Filesystem扩展包，支持上传到阿里云、腾讯云、七牛
 
 ```php
 return [
-    "default" => "qiniu",
+    "default" => "oss",
     "disks" => [
         "public" => [
             "type" => "local",
@@ -46,7 +46,16 @@ return [
             "domain" => "",
             "scheme" => "https",
             'encrypt'=> false,
-        ]
+        ],
+        // 华为云配置
+        "obs" => [
+            "type" => "obs",
+            "accessKey" => "",
+            "secretKey" => "",
+            "endpoint" => "",
+            "bucket" => "",
+            "domain" => ""
+        ],
     ]
 ];
 ```
@@ -89,3 +98,4 @@ $file = $this->request->file('file');
 ```php
 \think\facade\Filesystem::disk('oss')->getUrl(read);
 ```
+更详细用法参考Adapter对应文件

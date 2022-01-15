@@ -1,5 +1,5 @@
 {
-    "name": "johnny/tp6-filesystem-cloud",
+    "name": "johnnycai/tp6-filesystem-cloud",
     "description": "thinkphp6 filesystem cloud support,include Aliyun,Qcloud and Qiniu.",
     "type": "library",
     "license": "MIT",

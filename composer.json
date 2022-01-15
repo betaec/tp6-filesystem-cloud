@@ -21,6 +21,6 @@
         "qiniu/php-sdk": "^7.2",
         "qcloud/cos-sdk-v5": "^2.0",
         "aliyuncs/oss-sdk-php": "^2.3",
-        "zing/esdk-obs-php": "dev-master"
+        "zing/esdk-obs-php": "^3.21"
     }
 }

@@ -181,9 +181,11 @@ class QiniuAdapter extends AbstractAdapter
      */
     public function rename($path, $newPath)
     {
-        $response = $this->getBucketManager()->rename($this->bucket, $path, $newPath);
+        list($response, $error) = $this->getBucketManager()->rename($this->bucket, $path, $newPath);
 
-        return is_null($response);
+        if ($error) {
+            return false;
+        }
     }
 
     /**
@@ -196,9 +198,12 @@ class QiniuAdapter extends AbstractAdapter
      */
     public function copy($path, $newPath)
     {
-        $response = $this->getBucketManager()->copy($this->bucket, $path, $this->bucket, $newPath);
+        list($response, $error) = $this->getBucketManager()->copy($this->bucket, $path, $this->bucket, $newPath);
 
-        return is_null($response);
+        if ($error) {
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -210,9 +215,13 @@ class QiniuAdapter extends AbstractAdapter
      */
     public function delete($path)
     {
-        $response = $this->getBucketManager()->delete($this->bucket, $path);
+        list($response, $error) = $this->getBucketManager()->delete($this->bucket, $path);
 
-        return is_null($response);
+        if ($error) {
+            return false;
+        }
+
+        return true;
     }
 
     /**

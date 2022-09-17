@@ -96,14 +96,4 @@ $file = $this->request->file('file');
 ```php
 \think\facade\Filesystem::disk('oss')->createDir($dirname);
 ```
-
-###获取链接
-```php
-\think\facade\Filesystem::disk('oss')->getUrl($path);
-```
-
-###读取文件
-```php
-\think\facade\Filesystem::disk('oss')->getUrl(read);
-```
 更详细用法参考Adapter对应文件
